@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Optional, Callable
 import time
 import hashlib
+import subprocess
+import threading
 from loguru import logger
 from system_info import system_info
 
@@ -17,6 +19,9 @@ class CoreManager:
             'path': '',
             'system_info': {}
         }
+        self.core_process = None
+        self.is_running = False
+        self.log_callbacks = []
     
     def get_system_info(self):
         """获取系统信息用于调试"""
@@ -47,6 +52,19 @@ class CoreManager:
         except Exception as e:
             logger.error(f"获取官方hash失败: {str(e)}")
             return None
+    
+    def get_backup_hash_info(self) -> dict:
+        """获取备用hash信息"""
+        # 从文档.md中获取备用hash信息
+        backup_hashes = {
+            'JiJiDownCore-win64.exe': 'accb32ec04c6df727bb97e472f9518b11b15cfac5e54705d65a0f0159fd95db8',
+            'JiJiDownCore-win32.exe': 'b46f7c109492fd3b37a118c8d7a6d8434297d3deafefc8c09b6c3af78be391ed',
+            'JiJiDownCore-linux64': 'e573c317',  # 示例hash，实际需要从文档获取
+            'JiJiDownCore-linux32': 'e573c317',  # 示例hash，实际需要从文档获取
+            'JiJiDownCore-macos64': 'e573c317',  # 示例hash，实际需要从文档获取
+            'JiJiDownCore-macos32': 'e573c317'   # 示例hash，实际需要从文档获取
+        }
+        return backup_hashes
     
     
     def calculate_file_hash(self, file_path: str) -> Optional[str]:
@@ -315,6 +333,154 @@ class CoreManager:
             hours = int(seconds / 3600)
             minutes = int((seconds % 3600) / 60)
             return f"{hours}时{minutes}分"
+    
+    def start_core(self, config_file_path: str, resources_path: str = "./resources") -> bool:
+        """
+        启动核心程序
+        
+        Args:
+            config_file_path: 配置文件路径
+            resources_path: 核心文件所在目录
+            
+        Returns:
+            bool: 启动是否成功
+        """
+        try:
+            if self.is_running:
+                logger.warning("核心已经在运行中")
+                return False
+            
+            # 获取核心文件路径
+            core_filename = self.get_core_filename()
+            core_path = Path(resources_path).resolve() / core_filename
+            
+            if not core_path.exists():
+                logger.error(f"核心文件不存在: {core_path}")
+                return False
+            
+            config_path = Path(config_file_path)
+            if not config_path.exists():
+                logger.error(f"配置文件不存在: {config_path}")
+                return False
+            
+            # 创建子进程运行核心
+            self.core_process = subprocess.Popen(
+                [str(core_path), '-c', str(config_path)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True
+            )
+            
+            self.is_running = True
+            
+            # 启动输出读取线程
+            output_thread = threading.Thread(target=self._read_output)
+            output_thread.daemon = True
+            output_thread.start()
+            
+            logger.success(f"核心启动成功: {core_filename}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"启动核心失败: {str(e)}")
+            self.is_running = False
+            return False
+    
+    def stop_core(self) -> bool:
+        """
+        停止核心程序
+        
+        Returns:
+            bool: 停止是否成功
+        """
+        try:
+            if not self.is_running or not self.core_process:
+                logger.warning("没有正在运行的核心进程")
+                return False
+            
+            self.core_process.terminate()
+            self.core_process.wait(timeout=5)
+            self.is_running = False
+            self.core_process = None
+            
+            logger.info("核心已停止")
+            return True
+            
+        except Exception as e:
+            logger.error(f"停止核心失败: {str(e)}")
+            return False
+    
+    def _read_output(self):
+        """读取核心程序输出"""
+        try:
+            while self.is_running and self.core_process:
+                line = self.core_process.stdout.readline()
+                if line:
+                    # 调用所有日志回调函数
+                    for callback in self.log_callbacks:
+                        try:
+                            # 使用异步方式执行UI更新，避免slot错误
+                            if hasattr(callback, '__self__') and hasattr(callback.__self__, 'ui'):
+                                # 如果是UI组件的方法，使用异步执行
+                                import asyncio
+                                asyncio.create_task(self._safe_callback(callback, line))
+                            else:
+                                # 直接调用非UI回调
+                                callback(line)
+                        except Exception as e:
+                            logger.error(f"日志回调执行失败: {str(e)}")
+                else:
+                    break
+        except Exception as e:
+            logger.error(f"读取核心输出失败: {str(e)}")
+        finally:
+            self.is_running = False
+    
+    async def _safe_callback(self, callback, line):
+        """安全执行UI回调函数"""
+        try:
+            # 使用异步方式执行UI更新
+            await callback(line)
+        except Exception as e:
+            logger.error(f"异步日志回调执行失败: {str(e)}")
+    
+    def add_log_callback(self, callback: Callable[[str], None]):
+        """
+        添加日志回调函数
+        
+        Args:
+            callback: 日志回调函数，接收日志行作为参数
+        """
+        self.log_callbacks.append(callback)
+    
+    def remove_log_callback(self, callback: Callable[[str], None]):
+        """
+        移除日志回调函数
+        
+        Args:
+            callback: 要移除的回调函数
+        """
+        if callback in self.log_callbacks:
+            self.log_callbacks.remove(callback)
+    
+    def clear_log_callbacks(self):
+        """清除所有日志回调函数"""
+        self.log_callbacks.clear()
+    
+    def get_core_status(self) -> dict:
+        """
+        获取核心状态信息
+        
+        Returns:
+            dict: 核心状态信息
+        """
+        return {
+            'is_running': self.is_running,
+            'process_exists': self.core_process is not None,
+            'log_callbacks_count': len(self.log_callbacks)
+        }
 
 # 创建全局核心管理器实例
 core_manager = CoreManager()

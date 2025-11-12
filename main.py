@@ -221,18 +221,101 @@ def home():
                 completion_label.set_text(f'❌ 下载出错: {str(e)}').style('color: red')
                 ui.notify(f'下载出错: {str(e)}', type='negative')
         
-    # 根据文件状态显示不同的按钮文本
-    button_text = '更新核心文件' if hash_result['exists'] else '下载核心文件'
-    ui.button(button_text, on_click=download_core).style('margin-top: 10px')
+    # 检查配置文件和核心文件是否存在
+    config_file_path = config_manager.get_config_file_path()
+    config_exists = config_file_path.exists()
     
-    # 添加刷新按钮
-    async def refresh_status():
-        ui.navigate.reload()
+    # 根据文件状态显示不同的按钮
+    with ui.row().style('margin-top: 10px'):
+        button_text = '更新核心文件' if hash_result['exists'] else '下载核心文件'
+        ui.button(button_text, on_click=download_core)
+        
+        # 当核心存在且配置文件存在时显示启动核心按钮
+        if hash_result['exists'] and config_exists:
+            # 启动核心按钮
+            async def start_core():
+                # 创建日志显示窗口
+                with ui.dialog() as dialog, ui.card():
+                    ui.label('核心运行日志').style('font-size: 18px; font-weight: bold; margin-bottom: 10px')
+                    
+                    # 使用ui.log()组件显示日志
+                    log_display = ui.log().style('width: 600px; height: 400px; font-family: monospace; font-size: 12px; overflow-y: auto')
+                    
+                    # 控制按钮
+                    with ui.row():
+                        ui.button('开始运行', on_click=lambda: run_core(log_display, dialog))
+                        ui.button('停止运行', on_click=lambda: stop_core(log_display, dialog))
+                        ui.button('清空日志', on_click=lambda: log_display.clear())
+                        ui.button('关闭', on_click=dialog.close)
+                    
+                    # 初始日志信息
+                    log_display.push('核心日志窗口已打开')
+                    log_display.push(f'核心文件: {core_filename}')
+                    log_display.push(f'配置文件: {config_file_path}')
+                    log_display.push('点击"开始运行"启动核心')
+                    
+                    # 添加日志回调函数 - 使用ui.log()组件
+                    def log_callback(log_line):
+                        # 直接使用ui.log()推送日志，避免slot错误
+                        log_display.push(log_line.strip())
+                    
+                    # 保存回调函数引用到对话框属性
+                    dialog.log_callback_ref = log_callback
+                    
+                dialog.open()
+            
+            # 运行核心的函数
+            async def run_core(log_display, dialog):
+                log_display.push('正在启动核心...')
+                
+                try:
+                    # 使用core_manager启动核心
+                    success = core_manager.start_core(str(config_file_path))
+                    
+                    if success:
+                        # 添加日志回调
+                        core_manager.add_log_callback(dialog.log_callback_ref)
+                        log_display.push('核心启动成功！')
+                    else:
+                        log_display.push('核心启动失败')
+                    
+                except Exception as e:
+                    log_display.push(f'启动核心失败: {str(e)}')
+            
+            # 停止核心的函数
+            async def stop_core(log_display, dialog):
+                try:
+                    # 使用core_manager停止核心
+                    success = core_manager.stop_core()
+                    
+                    if success:
+                        # 移除日志回调
+                        core_manager.remove_log_callback(dialog.log_callback_ref)
+                        log_display.push('核心已停止')
+                    else:
+                        log_display.push('停止核心失败')
+                    
+                except Exception as e:
+                    log_display.push(f'停止核心失败: {str(e)}')
+            
+            ui.button('启动核心', on_click=start_core).style('margin-left: 10px')
+        
+        # 添加刷新按钮
+        async def refresh_status():
+            ui.navigate.reload()
+        
+        ui.button('检查更新', on_click=refresh_status).style('margin-left: 10px')
+        
+        # 添加设置页面按钮
+        ui.button('设置', on_click=lambda: ui.navigate.to('/settings')).style('margin-left: 10px')
     
-    ui.button('检查更新', on_click=refresh_status).style('margin-left: 10px; margin-top: 10px')
+    # 显示配置文件状态
+    config_status_text = '✅ 配置文件已存在' if config_exists else '❌ 配置文件不存在'
+    config_status_color = 'green' if config_exists else 'red'
+    ui.label(config_status_text).style(f'color: {config_status_color}; margin-top: 10px')
     
-    # 添加设置页面按钮
-    ui.button('设置', on_click=lambda: ui.navigate.to('/settings'))
+    if not config_exists:
+        ui.label('请先创建配置文件或前往设置页面进行配置').style('color: orange; margin-top: 5px')
 
 @ui.page('/settings')
 def settings():
