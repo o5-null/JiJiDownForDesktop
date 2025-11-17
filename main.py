@@ -29,6 +29,11 @@ def initialize_config():
     """初始化配置文件，如果不存在则创建默认配置"""
 
     try:
+        # 应用启动时归档日志
+        if __name__ == '__main__':
+            logger.info("应用启动，开始初始化...")
+            log_manager.archive_logs()
+        
         config_file_path = config_manager.get_config_file_path()
         
         # 只在主进程中记录配置文件已存在的信息，避免子进程重复日志
@@ -76,13 +81,82 @@ core = {
 }
 
 # 日志管理器类
-class LogManager:
+class CoreLogManager:
     """日志管理器，负责日志的持久化存储和恢复"""
     
-    def __init__(self, log_file_path: str = "logs/session_log.txt"):
+    def __init__(self, log_file_path: str = "logs/core_log.txt"):
         self.log_file_path = Path(log_file_path)
         self.log_file_path.parent.mkdir(parents=True, exist_ok=True)
         self.max_log_lines = 1000  # 最大保存日志行数
+        
+    def archive_logs(self) -> bool:
+        """归档当前日志文件，将core_log.txt重命名为带时间戳的文件"""
+        try:
+            if not self.log_file_path.exists():
+                logger.info("日志文件不存在，无需归档")
+                return True
+                
+            # 获取文件大小
+            file_size = self.log_file_path.stat().st_size
+            
+            # 如果文件为空或很小，无需归档
+            if file_size == 0:
+                logger.info("日志文件为空，无需归档")
+                return True
+                
+            # 生成归档文件名（带时间戳和毫秒）
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            milliseconds = int(time.time() * 1000) % 1000
+            archive_filename = f"{self.log_file_path.stem}_{timestamp}_{milliseconds:03d}.txt"
+            archive_path = self.log_file_path.parent / archive_filename
+            
+            # 重命名文件进行归档
+            self.log_file_path.rename(archive_path)
+            logger.info(f"日志文件已归档: {archive_filename} (大小: {file_size} 字节)")
+            
+            # 创建新的空日志文件
+            self.log_file_path.touch()
+            
+            # 清理旧的归档文件（保留最近7天的归档）
+            self._cleanup_old_archives()
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"日志归档失败: {str(e)}")
+            return False
+    
+    def _cleanup_old_archives(self, retention_days: int = 7):
+        """清理旧的归档文件，保留指定天数内的文件"""
+        try:
+            # 获取当前时间
+            current_time = time.time()
+            cutoff_time = current_time - (retention_days * 24 * 60 * 60)
+            
+            # 查找所有归档文件（基于当前日志文件名模式）
+            archive_pattern = f"{self.log_file_path.stem}_*.txt"
+            archive_files = list(self.log_file_path.parent.glob(archive_pattern))
+            
+            deleted_count = 0
+            for archive_file in archive_files:
+                # 跳过当前日志文件
+                if archive_file.name == self.log_file_path.name:
+                    continue
+                    
+                # 检查文件修改时间
+                file_mtime = archive_file.stat().st_mtime
+                
+                if file_mtime < cutoff_time:
+                    # 删除过期的归档文件
+                    archive_file.unlink()
+                    deleted_count += 1
+                    logger.debug(f"删除过期归档文件: {archive_file.name}")
+            
+            if deleted_count > 0:
+                logger.info(f"清理了 {deleted_count} 个过期归档文件（保留最近 {retention_days} 天）")
+                
+        except Exception as e:
+            logger.error(f"清理归档文件失败: {str(e)}")
     
     def save_log(self, log_line: str) -> bool:
         """保存单行日志到文件"""
@@ -149,7 +223,7 @@ class LogManager:
             logger.error(f"截断日志文件失败: {str(e)}")
 
 # 创建全局日志管理器实例
-log_manager = LogManager()
+log_manager = CoreLogManager()
 
 @ui.page('/')
 def home():
