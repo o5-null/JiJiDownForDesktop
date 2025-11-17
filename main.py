@@ -153,6 +153,15 @@ log_manager = LogManager()
 
 @ui.page('/')
 def home():
+    # 添加CSS样式定义
+    ui.add_css("""
+    .text-red { color: #f44336; font-weight: bold; }
+    .text-orange { color: #ff9800; font-weight: bold; }
+    .text-gray { color: #9e9e9e; }
+    .text-green { color: #4caf50; font-weight: bold; }
+    .text-blue { color: #2196f3; }
+    .text-fata { color: #d32f2f; font-weight: bold; background-color: #ffebee; padding: 2px 4px; border-radius: 3px; }
+    """)
     ui.label('唧唧2.0')
     ui.label('核心状态')
     
@@ -874,10 +883,21 @@ async def log_page():
     ui.timer(0.1, lambda: load_previous_logs(), once=True)
     
     # 添加日志回调函数
-    def log_callback(log_line):
-        # 直接使用ui.log()推送日志，避免slot错误
-        log_display.push(log_line.strip())
-        # 同时保存到持久化存储
+    def log_callback(log_line, log_level):
+        # 根据日志等级设置对应的CSS类名
+        style_map = {
+            'error': 'text-red',
+            'warning': 'text-orange', 
+            'success': 'text-green',
+            'info': 'text-blue',
+            'debug': 'text-gray',
+            'fata': 'text-fata'  # FATA致命错误使用特殊样式
+        }
+        style = style_map.get(log_level, 'text-gray')
+        
+        # 使用classes参数推送带样式的日志
+        log_display.push(log_line.strip(), classes=style)
+        # 同时保存到持久化存储（保存原始文本）
         log_manager.save_log(log_line.strip())
     
     # 清空日志的函数

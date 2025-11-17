@@ -400,17 +400,23 @@ class CoreManager:
             while self.is_running and self.core_process:
                 line = self.core_process.stdout.readline()
                 if line:
-                    # 调用所有日志回调函数
+                    # 过滤ANSI转义序列（控制台颜色代码）
+                    clean_line = self._filter_ansi_escape(line)
+                    
+                    # 识别日志等级
+                    log_level = self._get_log_level(clean_line)
+                    
+                    # 调用所有日志回调函数，传递日志文本和等级
                     for callback in self.log_callbacks:
                         try:
                             # 使用异步方式执行UI更新，避免slot错误
                             if hasattr(callback, '__self__') and hasattr(callback.__self__, 'ui'):
                                 # 如果是UI组件的方法，使用异步执行
                                 import asyncio
-                                asyncio.create_task(self._safe_callback(callback, line))
+                                asyncio.create_task(self._safe_callback(callback, clean_line, log_level))
                             else:
                                 # 直接调用非UI回调
-                                callback(line)
+                                callback(clean_line, log_level)
                         except Exception as e:
                             logger.error(f"日志回调执行失败: {str(e)}")
                 else:
@@ -420,11 +426,71 @@ class CoreManager:
         finally:
             self.is_running = False
     
-    async def _safe_callback(self, callback, line):
+    def _filter_ansi_escape(self, text: str) -> str:
+        """
+        过滤ANSI转义序列（控制台颜色代码）
+        
+        Args:
+            text: 包含ANSI转义序列的文本
+            
+        Returns:
+            str: 过滤后的干净文本
+        """
+        import re
+        # 匹配常见的ANSI转义序列
+        ansi_escape_patterns = [
+            r'\x1b\[[0-9;]*m',  # 颜色代码
+            r'\x1b\[[0-9;]*[A-HJ-ST]',  # 光标移动等控制代码
+            r'\x1b\[[0-9;]*[f]',  # 光标定位
+            r'\x1b\[[0-9;]*[K]',  # 清除行
+        ]
+        
+        clean_text = text
+        for pattern in ansi_escape_patterns:
+            ansi_escape = re.compile(pattern)
+            clean_text = ansi_escape.sub('', clean_text)
+        
+        return clean_text.strip()
+    
+    def _get_log_level(self, text: str) -> str:
+        """
+        识别日志等级
+        
+        Args:
+            text: 日志文本
+            
+        Returns:
+            str: 日志等级对应的CSS类名
+        """
+        import re
+        
+        # 检查日志中是否包含等级标识
+        log_levels = ['ERROR', 'WARNING', 'INFO', 'DEBUG', 'SUCCESS', 'FATA']
+        for level in log_levels:
+            # 使用正则表达式匹配日志等级（如 [ERROR], [WARNING] 等）
+            pattern = r'\[(' + re.escape(level) + r')\]'
+            if re.search(pattern, text, re.IGNORECASE):
+                return level.lower()
+        
+        # 如果没有匹配到特定等级，检查常见的关键词
+        text_lower = text.lower()
+        if any(keyword in text_lower for keyword in ['error', 'failed', 'failure', 'exception', 'fatal']):
+            return 'error'
+        elif any(keyword in text_lower for keyword in ['warning', 'warn', 'caution']):
+            return 'warning'
+        elif any(keyword in text_lower for keyword in ['success', 'completed', 'finished', 'done', 'ready']):
+            return 'success'
+        elif any(keyword in text_lower for keyword in ['debug', 'trace']):
+            return 'debug'
+        
+        # 默认使用info等级
+        return 'info'
+    
+    async def _safe_callback(self, callback, line, log_level):
         """安全执行UI回调函数"""
         try:
             # 使用异步方式执行UI更新
-            await callback(line)
+            await callback(line, log_level)
         except Exception as e:
             logger.error(f"异步日志回调执行失败: {str(e)}")
     
