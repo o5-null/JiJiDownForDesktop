@@ -218,16 +218,16 @@ class ConfigManager:
                 'download-speed-limit': 0,
                 'disable-mcdn': False
             },
-            'jdm-settings': {
+            'jdm': {
                 'max-retry': 3,
                 'retry-wait': 5,
-                'session-workers': 4,
+                'session-workers': 1,
                 'part-workers': 4,
                 'min-split-size': 1048576,
                 'proxy-addr': '',
                 'check-best-mirror': True,
                 'cache-in-ram': False,
-                'cache-in-ram-limit': 536870912,
+                'cache-in-ram-limit': 512,
                 'insecure-skip-verify': False,
                 'custom-root-certificates': ''
             }

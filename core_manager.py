@@ -52,20 +52,7 @@ class CoreManager:
         except Exception as e:
             logger.error(f"获取官方hash失败: {str(e)}")
             return None
-    
-    def get_backup_hash_info(self) -> dict:
-        """获取备用hash信息"""
-        # 从文档.md中获取备用hash信息
-        backup_hashes = {
-            'JiJiDownCore-win64.exe': 'accb32ec04c6df727bb97e472f9518b11b15cfac5e54705d65a0f0159fd95db8',
-            'JiJiDownCore-win32.exe': 'b46f7c109492fd3b37a118c8d7a6d8434297d3deafefc8c09b6c3af78be391ed',
-            'JiJiDownCore-linux64': 'e573c317',  # 示例hash，实际需要从文档获取
-            'JiJiDownCore-linux32': 'e573c317',  # 示例hash，实际需要从文档获取
-            'JiJiDownCore-macos64': 'e573c317',  # 示例hash，实际需要从文档获取
-            'JiJiDownCore-macos32': 'e573c317'   # 示例hash，实际需要从文档获取
-        }
-        return backup_hashes
-    
+        
     
     def calculate_file_hash(self, file_path: str) -> Optional[str]:
         """计算文件的SHA256哈希值"""
@@ -100,14 +87,9 @@ class CoreManager:
         hash_source = 'official'
         
         # 如果无法获取官方hash，使用备用hash
-        if not official_hash:
-            logger.info("无法获取官方hash，尝试使用备用hash")
-            backup_hashes = self.get_backup_hash_info()
-            official_hash = backup_hashes.get(core_filename)
-            hash_source = 'backup'
         
         if not official_hash:
-            logger.error("无法获取任何hash值")
+            logger.error("无法获取在线hash值")
             return {
                 'valid': False,
                 'exists': True,
@@ -365,7 +347,7 @@ class CoreManager:
             
             # 创建子进程运行核心
             self.core_process = subprocess.Popen(
-                [str(core_path), '-c', str(config_path)],
+                [str(core_path), '', str(config_path)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,

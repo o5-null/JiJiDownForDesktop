@@ -8,11 +8,14 @@ from config_manager import config_manager
 from system_info import system_info
 from loguru import logger
 import sys
+import time
+from typing import List, Optional
 
 # 配置loguru日志
 logger.remove()  # 移除默认的日志处理器
 logger.add(sys.stderr,colorize=True, level="INFO")
 logger.add("logs/JFD_{time:YYYY-MM-DD}.log", rotation="1 day", retention="7 days", format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} - {message}", level="DEBUG")
+
 
 # 创建默认文件夹
 Path('./config').mkdir(parents=True, exist_ok=True)
@@ -24,6 +27,7 @@ Path('./resources').mkdir(parents=True, exist_ok=True)
 # 软件启动时初始化配置
 def initialize_config():
     """初始化配置文件，如果不存在则创建默认配置"""
+
     try:
         config_file_path = config_manager.get_config_file_path()
         
@@ -70,6 +74,82 @@ core = {
     'filename': '',
     'path': '',
 }
+
+# 日志管理器类
+class LogManager:
+    """日志管理器，负责日志的持久化存储和恢复"""
+    
+    def __init__(self, log_file_path: str = "logs/session_log.txt"):
+        self.log_file_path = Path(log_file_path)
+        self.log_file_path.parent.mkdir(parents=True, exist_ok=True)
+        self.max_log_lines = 1000  # 最大保存日志行数
+    
+    def save_log(self, log_line: str) -> bool:
+        """保存单行日志到文件"""
+        try:
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            formatted_line = f"[{timestamp}] {log_line}\n"
+            
+            # 追加写入日志文件
+            with open(self.log_file_path, 'a', encoding='utf-8') as f:
+                f.write(formatted_line)
+            
+            # 检查日志文件大小，如果超过限制则截断
+            self._truncate_log_file()
+            return True
+            
+        except Exception as e:
+            logger.error(f"保存日志失败: {str(e)}")
+            return False
+    
+    def load_logs(self) -> List[str]:
+        """从文件加载所有日志"""
+        try:
+            if not self.log_file_path.exists():
+                return []
+            
+            with open(self.log_file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            # 返回最后max_log_lines行日志
+            return [line.strip() for line in lines[-self.max_log_lines:]]
+            
+        except Exception as e:
+            logger.error(f"加载日志失败: {str(e)}")
+            return []
+    
+    def clear_logs(self) -> bool:
+        """清空日志文件"""
+        try:
+            if self.log_file_path.exists():
+                self.log_file_path.unlink()
+            return True
+            
+        except Exception as e:
+            logger.error(f"清空日志失败: {str(e)}")
+            return False
+    
+    def _truncate_log_file(self):
+        """截断日志文件，保持最大行数限制"""
+        try:
+            if not self.log_file_path.exists():
+                return
+            
+            with open(self.log_file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            if len(lines) > self.max_log_lines:
+                # 保留最后max_log_lines行
+                truncated_lines = lines[-self.max_log_lines:]
+                
+                with open(self.log_file_path, 'w', encoding='utf-8') as f:
+                    f.writelines(truncated_lines)
+                    
+        except Exception as e:
+            logger.error(f"截断日志文件失败: {str(e)}")
+
+# 创建全局日志管理器实例
+log_manager = LogManager()
 
 @ui.page('/')
 def home():
@@ -232,73 +312,8 @@ def home():
         
         # 当核心存在且配置文件存在时显示启动核心按钮
         if hash_result['exists'] and config_exists:
-            # 启动核心按钮
-            async def start_core():
-                # 创建日志显示窗口
-                with ui.dialog() as dialog, ui.card():
-                    ui.label('核心运行日志').style('font-size: 18px; font-weight: bold; margin-bottom: 10px')
-                    
-                    # 使用ui.log()组件显示日志
-                    log_display = ui.log().style('width: 600px; height: 400px; font-family: monospace; font-size: 12px; overflow-y: auto')
-                    
-                    # 控制按钮
-                    with ui.row():
-                        ui.button('开始运行', on_click=lambda: run_core(log_display, dialog))
-                        ui.button('停止运行', on_click=lambda: stop_core(log_display, dialog))
-                        ui.button('清空日志', on_click=lambda: log_display.clear())
-                        ui.button('关闭', on_click=dialog.close)
-                    
-                    # 初始日志信息
-                    log_display.push('核心日志窗口已打开')
-                    log_display.push(f'核心文件: {core_filename}')
-                    log_display.push(f'配置文件: {config_file_path}')
-                    log_display.push('点击"开始运行"启动核心')
-                    
-                    # 添加日志回调函数 - 使用ui.log()组件
-                    def log_callback(log_line):
-                        # 直接使用ui.log()推送日志，避免slot错误
-                        log_display.push(log_line.strip())
-                    
-                    # 保存回调函数引用到对话框属性
-                    dialog.log_callback_ref = log_callback
-                    
-                dialog.open()
-            
-            # 运行核心的函数
-            async def run_core(log_display, dialog):
-                log_display.push('正在启动核心...')
-                
-                try:
-                    # 使用core_manager启动核心
-                    success = core_manager.start_core(str(config_file_path))
-                    
-                    if success:
-                        # 添加日志回调
-                        core_manager.add_log_callback(dialog.log_callback_ref)
-                        log_display.push('核心启动成功！')
-                    else:
-                        log_display.push('核心启动失败')
-                    
-                except Exception as e:
-                    log_display.push(f'启动核心失败: {str(e)}')
-            
-            # 停止核心的函数
-            async def stop_core(log_display, dialog):
-                try:
-                    # 使用core_manager停止核心
-                    success = core_manager.stop_core()
-                    
-                    if success:
-                        # 移除日志回调
-                        core_manager.remove_log_callback(dialog.log_callback_ref)
-                        log_display.push('核心已停止')
-                    else:
-                        log_display.push('停止核心失败')
-                    
-                except Exception as e:
-                    log_display.push(f'停止核心失败: {str(e)}')
-            
-            ui.button('启动核心', on_click=start_core).style('margin-left: 10px')
+            # 添加日志页面按钮
+            ui.button('查看日志', on_click=lambda: ui.navigate.to('/log')).style('margin-left: 10px')
         
         # 添加刷新按钮
         async def refresh_status():
@@ -479,7 +494,7 @@ def settings():
             proxy_addr = ui.input(
                 label='代理地址',
                 placeholder='例如: http://127.0.0.1:1080',
-                value=config_manager.get('jdm-settings.proxy-addr', ''),
+                value=config_manager.get('jdm.proxy-addr', ''),
                 validation={'代理地址格式不正确': validate_proxy_url}
             ).style('width: 300px')
             
@@ -488,7 +503,7 @@ def settings():
             # 最大重试次数
             max_retry = ui.number(
                 label='最大重试次数',
-                value=config_manager.get('jdm-settings.max-retry', 3),
+                value=config_manager.get('jdm.max-retry', 3),
                 min=1,
                 max=10,
                 validation={'重试次数必须在1-10之间': lambda v: 1 <= v <= 10}
@@ -497,7 +512,7 @@ def settings():
             # 重试等待时间
             retry_wait = ui.number(
                 label='重试等待时间 (秒)',
-                value=config_manager.get('jdm-settings.retry-wait', 5),
+                value=config_manager.get('jdm.retry-wait', 5),
                 min=1,
                 max=600,
                 validation={'等待时间必须在1-600秒之间': lambda v: 1 <= v <= 600}
@@ -506,16 +521,16 @@ def settings():
             # 会话工作者数量
             session_workers = ui.number(
                 label='会话工作者数量',
-                value=config_manager.get('jdm-settings.session-workers', 4),
+                value=config_manager.get('jdm.session-workers', 1),
                 min=1,
                 max=3,
-                validation={'会话工作者数量必须在1-3之间': lambda v: 1 <= v <= 3}
+                validation={'会话工作者数量必须在1-3之间': lambda v: 1 <= v < 3}
             ).style('width: 200px')
             
             # 分段工作者数量
             part_workers = ui.number(
                 label='分段工作者数量',
-                value=config_manager.get('jdm-settings.part-workers', 4),
+                value=config_manager.get('jdm.part-workers', 4),
                 min=1,
                 max=8,
                 validation={'分段工作者数量必须在1-8之间': lambda v: 1 <= v <= 8}
@@ -524,7 +539,7 @@ def settings():
             # 最小分段大小
             min_split_size = ui.number(
                 label='最小分段大小 (MiB)',
-                value=config_manager.get('jdm-settings.min-split-size', 1048576) // (1024 * 1024),
+                value=config_manager.get('jdm.min-split-size', 1048576) // (1024 * 1024),
                 min=1,
                 max=100,
                 validation={'分段大小必须在1-100 MiB之间': lambda v: 1 <= v <= 100}
@@ -533,7 +548,7 @@ def settings():
             # 检查最快镜像
             check_best_mirror = ui.checkbox(
                 '检查最快的下载源',
-                value=config_manager.get('jdm-settings.check-best-mirror', True)
+                value=config_manager.get('jdm.check-best-mirror', True)
             )
             
         # 用户设置
@@ -605,13 +620,13 @@ def settings():
             # 内存缓存
             cache_in_ram = ui.checkbox(
                 '启用内存缓存',
-                value=config_manager.get('jdm-settings.cache-in-ram', False)
+                value=config_manager.get('jdm.cache-in-ram', False)
             )
             
             # 内存缓存限制
             cache_in_ram_limit = ui.number(
                 label='内存缓存限制 (MiB)',
-                value=config_manager.get('jdm-settings.cache-in-ram-limit', 536870912) // (1024 * 1024),
+                value=config_manager.get('jdm.cache-in-ram-limit', 512),
                 min=500,
                 max=16384,
                 validation={'内存缓存限制必须在500-16384 MiB之间': lambda v: 500 <= v <= 16384}
@@ -622,7 +637,7 @@ def settings():
             # 跳过证书验证
             insecure_skip_verify = ui.checkbox(
                 '跳过HTTPS证书验证',
-                value=config_manager.get('jdm-settings.insecure-skip-verify', False)
+                value=config_manager.get('jdm.insecure-skip-verify', False)
             )
             
             # 自定义根证书
@@ -643,7 +658,7 @@ def settings():
                 custom_root_certificates = ui.input(
                     label='自定义根证书路径',
                     placeholder='PEM格式证书文件路径',
-                    value=config_manager.get('jdm-settings.custom-root-certificates', ''),
+                    value=config_manager.get('jdm.custom-root-certificates', ''),
                     validation={'证书路径无效': validate_certificate_path}
                 ).style('flex-grow: 1; margin-right: 10px')
                 ui.button('浏览', on_click=create_file_browser_button(custom_root_certificates, '选择证书文件', select_directory=False, file_filter=['pem', 'crt', ''])).style('margin-top: 20px')
@@ -668,16 +683,16 @@ def settings():
                     'download-speed-limit': int(speed_limit.value) * 1024 * 1024,  # 转换为bytes
                     'disable-mcdn': disable_mcdn.value
                 },
-                'jdm-settings': {
+                'jdm': {
                     'max-retry': int(max_retry.value),
                     'retry-wait': int(retry_wait.value),
                     'session-workers': int(session_workers.value),
                     'part-workers': int(part_workers.value),
-                    'min-split-size': int(min_split_size.value) * 1024 * 1024,  # 转换为bytes
+                    'min-split-size': int(min_split_size.value),
                     'proxy-addr': proxy_addr.value,
                     'check-best-mirror': check_best_mirror.value,
                     'cache-in-ram': cache_in_ram.value,
-                    'cache-in-ram-limit': int(cache_in_ram_limit.value) * 1024 * 1024,  # 转换为bytes
+                    'cache-in-ram-limit': int(cache_in_ram_limit.value),
                     'insecure-skip-verify': insecure_skip_verify.value,
                     'custom-root-certificates': custom_root_certificates.value
                 },
@@ -745,8 +760,8 @@ def settings():
                     speed_limit.value = task.get('download-speed-limit', 0) // (1024 * 1024)  # 转换回MiB
                     disable_mcdn.value = task.get('disable-mcdn', False)
                 
-                if 'jdm-settings' in settings_data:
-                    jdm = settings_data['jdm-settings']
+                if 'jdm' in settings_data:
+                    jdm = settings_data['jdm']
                     proxy_addr.value = jdm.get('proxy-addr', '')
                     max_retry.value = jdm.get('max-retry', 3)
                     retry_wait.value = jdm.get('retry-wait', 5)
@@ -776,9 +791,217 @@ def settings():
         ui.button('重置为默认', on_click=reset_settings).style('margin-right: 10px')
         ui.button('保存设置', on_click=save_settings).style('background-color: #1976d2; color: white')
 
+@ui.page('/log')
+async def log_page():
+    ui.label('核心运行日志').style('font-size: 24px; font-weight: bold; margin-bottom: 20px')
+    
+    # 添加返回按钮
+    with ui.row().style('margin-bottom: 20px'):
+        ui.button('← 返回主页', on_click=lambda: ui.navigate.to('/')).style('background-color: #f5f5f5; color: #333')
+    
+    # 显示核心文件信息
+    core_filename = get_core_filename()
+    config_file_path = config_manager.get_config_file_path()
+    
+    ui.label(f'核心文件: {core_filename}').style('font-size: 14px; margin-bottom: 5px')
+    ui.label(f'配置文件: {config_file_path}').style('font-size: 14px; margin-bottom: 20px')
+    
+    # 使用ui.log()组件显示日志
+    log_display = ui.log().style('width: 100%; height: 500px; font-family: monospace; font-size: 12px; overflow-y: auto; border: 1px solid #ccc; padding: 10px')
+
+    
+    # 控制按钮
+    with ui.row().style('margin-top: 20px; margin-bottom: 20px'):
+        # 开始运行按钮 - 根据核心运行状态动态禁用
+        start_button = ui.button('开始运行', on_click=lambda: run_core(log_display, start_button, stop_button))
+        
+        # 停止运行按钮 - 根据核心运行状态动态禁用
+        stop_button = ui.button('停止运行', on_click=lambda: stop_core(log_display, start_button, stop_button))
+        
+        ui.button('清空日志', on_click=lambda: clear_logs(log_display))
+    
+    # 核心运行状态显示
+    status_label = ui.label('').style('font-size: 14px; margin-bottom: 10px; font-weight: bold')
+    
+    # 初始化按钮状态
+    async def update_button_states():
+        core_status = core_manager.get_core_status()
+        is_running = core_status['is_running']
+        
+        # 更新按钮状态
+        if start_button and stop_button:
+            start_button.set_enabled(not is_running)
+            stop_button.set_enabled(is_running)
+        
+        # 更新状态标签
+        if status_label:
+            if is_running:
+                status_label.set_text('核心状态: 正在运行')
+                status_label.style('color: green')
+            else:
+                status_label.set_text('核心状态: 已停止')
+                status_label.style('color: red')
+    
+    # 页面加载时初始化按钮状态
+    ui.timer(0.1, lambda: update_button_states(), once=True)
+    
+    # 定期更新按钮状态（每2秒检查一次）
+    ui.timer(2.0, lambda: update_button_states())
+    
+    # 页面加载时恢复之前的日志
+    async def load_previous_logs():
+        try:
+            previous_logs = log_manager.load_logs()
+            if previous_logs:
+                #log_display.push('=== 恢复之前的日志 ===')
+                for log_line in previous_logs:
+                    log_display.push(log_line)
+                #log_display.push('=== 日志恢复完成 ===')
+            else:
+                log_display.push('日志页面已打开')
+                log_display.push(f'核心文件: {core_filename}')
+                log_display.push(f'配置文件: {config_file_path}')
+                log_display.push('点击"开始运行"启动核心')
+        except Exception as e:
+            logger.error(f"加载历史日志失败: {str(e)}")
+            log_display.push(f'加载历史日志失败: {str(e)}')
+            log_display.push('日志页面已打开')
+            log_display.push(f'核心文件: {core_filename}')
+            log_display.push(f'配置文件: {config_file_path}')
+            log_display.push('点击"开始运行"启动核心')
+    
+    # 页面加载完成后恢复日志
+    ui.timer(0.1, lambda: load_previous_logs(), once=True)
+    
+    # 添加日志回调函数
+    def log_callback(log_line):
+        # 直接使用ui.log()推送日志，避免slot错误
+        log_display.push(log_line.strip())
+        # 同时保存到持久化存储
+        log_manager.save_log(log_line.strip())
+    
+    # 清空日志的函数
+    async def clear_logs(log_display):
+        try:
+            # 清空显示
+            log_display.clear()
+            # 清空持久化存储
+            if log_manager.clear_logs():
+                log_display.push('日志已清空')
+                log_manager.save_log('用户手动清空日志')
+            else:
+                log_display.push('清空日志失败')
+        except Exception as e:
+            log_display.push(f'清空日志失败: {str(e)}')
+    
+    # 运行核心的函数
+    async def run_core(log_display, start_button, stop_button):
+        log_display.push('正在启动核心...')
+        log_manager.save_log('正在启动核心...')
+        
+        # 禁用开始按钮，启用停止按钮
+        if start_button and stop_button:
+            start_button.set_enabled(False)
+            stop_button.set_enabled(True)
+        if status_label:
+            status_label.set_text('核心状态: 正在启动...')
+            status_label.style('color: orange')
+        
+        try:
+            # 使用core_manager启动核心
+            success = core_manager.start_core(str(config_file_path))
+            
+            if success:
+                # 添加日志回调
+                core_manager.add_log_callback(log_callback)
+                log_display.push('核心启动成功！')
+                log_manager.save_log('核心启动成功！')
+                
+                # 更新按钮状态和状态标签
+                if start_button and stop_button:
+                    start_button.set_enabled(False)
+                    stop_button.set_enabled(True)
+                if status_label:
+                    status_label.set_text('核心状态: 正在运行')
+                    status_label.style('color: green')
+            else:
+                log_display.push('核心启动失败')
+                log_manager.save_log('核心启动失败')
+                
+                # 启动失败时恢复按钮状态
+                if start_button and stop_button:
+                    start_button.set_enabled(True)
+                    stop_button.set_enabled(False)
+                if status_label:
+                    status_label.set_text('核心状态: 启动失败')
+                    status_label.style('color: red')
+            
+        except Exception as e:
+            log_display.push(f'启动核心失败: {str(e)}')
+            log_manager.save_log(f'启动核心失败: {str(e)}')
+            
+            # 启动失败时恢复按钮状态
+            if start_button and stop_button:
+                start_button.set_enabled(True)
+                stop_button.set_enabled(False)
+            if status_label:
+                status_label.set_text('核心状态: 启动失败')
+                status_label.style('color: red')
+    
+    # 停止核心的函数
+    async def stop_core(log_display, start_button, stop_button):
+        # 禁用停止按钮，启用开始按钮
+        if start_button and stop_button:
+            start_button.set_enabled(False)
+            stop_button.set_enabled(False)
+        if status_label:
+            status_label.set_text('核心状态: 正在停止...')
+            status_label.style('color: orange')
+        
+        try:
+            # 使用core_manager停止核心
+            success = core_manager.stop_core()
+            
+            if success:
+                # 移除日志回调
+                core_manager.remove_log_callback(log_callback)
+                log_display.push('核心已停止')
+                log_manager.save_log('核心已停止')
+                
+                # 更新按钮状态和状态标签
+                if start_button and stop_button:
+                    start_button.set_enabled(True)
+                    stop_button.set_enabled(False)
+                if status_label:
+                    status_label.set_text('核心状态: 已停止')
+                    status_label.style('color: red')
+            else:
+                log_display.push('停止核心失败')
+                log_manager.save_log('停止核心失败')
+                
+                # 停止失败时恢复按钮状态
+                if start_button and stop_button:
+                    start_button.set_enabled(False)
+                    stop_button.set_enabled(True)
+                if status_label:
+                    status_label.set_text('核心状态: 停止失败')
+                    status_label.style('color: orange')
+            
+        except Exception as e:
+            log_display.push(f'停止核心失败: {str(e)}')
+            log_manager.save_log(f'停止核心失败: {str(e)}')
+            
+            # 停止失败时恢复按钮状态
+            if start_button and stop_button:
+                start_button.set_enabled(False)
+                stop_button.set_enabled(True)
+            if status_label:
+                status_label.set_text('核心状态: 停止失败')
+                status_label.style('color: orange')
+
 app.on_startup(initialize_config)
 # 在UI启动前初始化配置
 if __name__ in {"__main__", "__mp_main__"}:
 
     # 启动UI
-    ui.run(root=home,title='NiceGUI', host='0.0.0.0', port=8080,native=True)
+    ui.run(root=home,title='JiJiDown Desktop', host='0.0.0.0', port=8080,native=True)
