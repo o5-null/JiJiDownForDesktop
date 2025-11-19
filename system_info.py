@@ -4,6 +4,7 @@ import socket
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional
+from loguru import logger
 
 
 class SystemInfo:
@@ -116,6 +117,12 @@ class SystemInfo:
     def clear_cache(self):
         """清除缓存"""
         self._cache.clear()
+
+
+    def initialize(self) -> None:
+        """初始化系统信息管理器"""
+        # 目前不需要特殊的初始化操作，但保留此方法以保持接口一致性
+        logger.info("系统信息管理器初始化完成")
 
 
 # 创建全局系统信息实例

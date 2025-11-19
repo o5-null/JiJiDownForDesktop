@@ -96,6 +96,11 @@ class ConfigManager:
         # 缓存配置值以避免重复计算
         self._config_cache = {}
     
+    def initialize(self) -> None:
+        """初始化配置管理器，加载配置文件"""
+        self.load_config()
+        logger.info("配置管理器初始化完成")
+    
     def get_config(self, config_key: str, use_cache: bool = True) -> Any:
         """
         统一配置访问方法 - 替代所有单独的get_xxx方法

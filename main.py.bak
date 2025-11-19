@@ -92,8 +92,12 @@ core = {
 def update_core_status():
     """
     更新全局缓存变量core中的核心运行状态
+    仅在核心运行状态发生变化时才输出日志
     """
     try:
+        # 保存旧的核心运行状态用于比较
+        old_is_running = core['status'].get('is_running', False)
+        
         # 获取核心管理器状态
         core_status = core_manager.get_core_status()
         
@@ -116,7 +120,15 @@ def update_core_status():
             'last_update': time.time()
         })
         
-        logger.debug(f"核心状态已更新: {core['status']}")
+        # 检查核心运行状态是否发生变化
+        new_is_running = core['status']['is_running']
+        if old_is_running != new_is_running:
+            # 状态发生变化时才输出日志
+            if new_is_running:
+                logger.info("核心状态: 正在运行")
+            else:
+                logger.info("核心状态: 已停止")
+        
         return True
         
     except Exception as e:
@@ -268,7 +280,7 @@ class CoreLogManager:
 # 创建全局日志管理器实例
 log_manager = CoreLogManager()
 
-@ui.page('/')
+#@ui.page('/')
 def home():
     # 添加CSS样式定义
     ui.add_css("""
@@ -453,6 +465,9 @@ def home():
     config_file_path = config_manager.get_config_file_path()
     config_exists = config_file_path.exists()
     
+    # 子页面导航
+    ui.sub_pages({'/log': log_page, '/settings': settings})
+
     # 根据文件状态显示不同的按钮
     with ui.row().style('margin-top: 10px'):
         button_text = '更新核心文件' if hash_result['exists'] else '下载核心文件'
@@ -480,7 +495,7 @@ def home():
     if not config_exists:
         ui.label('请先创建配置文件或前往设置页面进行配置').style('color: orange; margin-top: 5px')
 
-@ui.page('/settings')
+#@ui.page('/settings')
 def settings():
     ui.label('设置').style('font-size: 24px; font-weight: bold; margin-bottom: 20px')
     
@@ -939,7 +954,7 @@ def settings():
         ui.button('重置为默认', on_click=reset_settings).style('margin-right: 10px')
         ui.button('保存设置', on_click=save_settings).style('background-color: #1976d2; color: white')
 
-@ui.page('/log')
+#@ui.page('/log')
 async def log_page():
     ui.label('核心运行日志').style('font-size: 24px; font-weight: bold; margin-bottom: 20px')
     
@@ -1178,4 +1193,4 @@ app.on_startup(initialize_config)
 if __name__ in {"__main__", "__mp_main__"}:
 
     # 启动UI
-    ui.run(root=home,title='JiJiDown Desktop', host='0.0.0.0', port=8080,native=True)
+    ui.run(home,title='JiJiDown Desktop', host='0.0.0.0', port=8080,native=True)
