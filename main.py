@@ -78,7 +78,50 @@ core = {
     'exist': False,
     'filename': '',
     'path': '',
+    'status': {
+        'is_running': False,
+        'process_exists': False,
+        'process_status': 'unknown',
+        'other_processes_running': False,
+        'core_filename': '',
+        'log_callbacks_count': 0,
+        'last_update': None
+    }
 }
+
+def update_core_status():
+    """
+    更新全局缓存变量core中的核心运行状态
+    """
+    try:
+        # 获取核心管理器状态
+        core_status = core_manager.get_core_status()
+        
+        # 获取核心文件信息
+        core_info = core_manager.get_core_info()
+        
+        # 更新全局缓存变量
+        core['exist'] = core_info['exist']
+        core['filename'] = core_info['filename']
+        core['path'] = core_info['path']
+        
+        # 更新状态信息
+        core['status'].update({
+            'is_running': core_status['is_running'],
+            'process_exists': core_status['process_exists'],
+            'process_status': core_status.get('process_status', 'unknown'),
+            'other_processes_running': core_status.get('other_processes_running', False),
+            'core_filename': core_status.get('core_filename', ''),
+            'log_callbacks_count': core_status.get('log_callbacks_count', 0),
+            'last_update': time.time()
+        })
+        
+        logger.debug(f"核心状态已更新: {core['status']}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"更新核心状态失败: {str(e)}")
+        return False
 
 # 日志管理器类
 class CoreLogManager:
@@ -251,11 +294,33 @@ def home():
     # Hash校验结果显示
     hash_status = ui.label('').style('margin-top: 10px')
     
+    # 核心运行状态显示
+    core_running_status = ui.label('').style('margin-top: 10px; font-weight: bold')
+    
     # 详细信息展开区域
     details_expansion = ui.expansion('详细信息', icon='info').style('margin-top: 10px')
     
     # 进度条和状态显示区域
     progress_container = ui.column().style('width: 100%; margin-top: 20px')
+    
+    # 更新核心运行状态显示
+    def update_core_running_display():
+        # 更新全局缓存变量core中的核心状态
+        update_core_status()
+        
+        # 根据核心运行状态更新显示
+        if core['status']['is_running']:
+            core_running_status.set_text('核心状态: 正在运行')
+            core_running_status.style('color: green')
+        else:
+            core_running_status.set_text('核心状态: 已停止')
+            core_running_status.style('color: red')
+    
+    # 页面加载时初始化核心运行状态显示
+    ui.timer(0.1, lambda: update_core_running_display(), once=True)
+    
+    # 定期更新核心运行状态显示（每5秒检查一次）
+    ui.timer(5.0, lambda: update_core_running_display())
     
     # 检查核心文件状态和hash校验
     hash_result = core_manager.check_core_hash()
@@ -908,8 +973,11 @@ async def log_page():
     
     # 初始化按钮状态
     async def update_button_states():
-        core_status = core_manager.get_core_status()
-        is_running = core_status['is_running']
+        # 更新全局缓存变量core中的核心状态
+        update_core_status()
+        
+        # 使用全局缓存变量core中的状态信息
+        is_running = core['status']['is_running']
         
         # 更新按钮状态
         if start_button and stop_button:
@@ -1011,6 +1079,9 @@ async def log_page():
                 log_display.push('核心启动成功！')
                 log_manager.save_log('核心启动成功！')
                 
+                # 更新全局缓存变量core中的核心状态
+                update_core_status()
+                
                 # 更新按钮状态和状态标签
                 if start_button and stop_button:
                     start_button.set_enabled(False)
@@ -1021,6 +1092,9 @@ async def log_page():
             else:
                 log_display.push('核心启动失败')
                 log_manager.save_log('核心启动失败')
+                
+                # 更新全局缓存变量core中的核心状态
+                update_core_status()
                 
                 # 启动失败时恢复按钮状态
                 if start_button and stop_button:
@@ -1062,6 +1136,9 @@ async def log_page():
                 log_display.push('核心已停止')
                 log_manager.save_log('核心已停止')
                 
+                # 更新全局缓存变量core中的核心状态
+                update_core_status()
+                
                 # 更新按钮状态和状态标签
                 if start_button and stop_button:
                     start_button.set_enabled(True)
@@ -1072,6 +1149,9 @@ async def log_page():
             else:
                 log_display.push('停止核心失败')
                 log_manager.save_log('停止核心失败')
+                
+                # 更新全局缓存变量core中的核心状态
+                update_core_status()
                 
                 # 停止失败时恢复按钮状态
                 if start_button and stop_button:

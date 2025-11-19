@@ -3,3 +3,4 @@ requests>=2.31.0
 aiohttp>=3.9.0
 pyyaml>=6.0
 loguru>=0.7.0
+psutil>=5.9.0

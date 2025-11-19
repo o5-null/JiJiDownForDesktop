@@ -318,7 +318,7 @@ class CoreManager:
     
     def start_core(self, config_file_path: str, resources_path: str = "./resources") -> bool:
         """
-        启动核心程序
+        启动核心程序，保证同时只启动一个核心
         
         Args:
             config_file_path: 配置文件路径
@@ -328,8 +328,15 @@ class CoreManager:
             bool: 启动是否成功
         """
         try:
+            # 检查核心是否已经在运行
             if self.is_running:
-                logger.warning("核心已经在运行中")
+                logger.warning("核心已经在运行中，无法重复启动")
+                return False
+            
+            # 检查进程是否仍然存在（防止状态不同步）
+            if self.core_process and self.core_process.poll() is None:
+                logger.warning("检测到核心进程仍在运行，但状态不同步")
+                self.is_running = True
                 return False
             
             # 获取核心文件路径
@@ -343,6 +350,11 @@ class CoreManager:
             config_path = Path(config_file_path)
             if not config_path.exists():
                 logger.error(f"配置文件不存在: {config_path}")
+                return False
+            
+            # 检查是否已经有同名进程在运行（额外的安全措施）
+            if self._is_core_process_running(core_filename):
+                logger.warning(f"检测到已有核心进程在运行: {core_filename}")
                 return False
             
             # 创建子进程运行核心
@@ -368,30 +380,64 @@ class CoreManager:
         except Exception as e:
             logger.error(f"启动核心失败: {str(e)}")
             self.is_running = False
+            self.core_process = None
             return False
     
     def stop_core(self) -> bool:
         """
-        停止核心程序
+        停止核心程序，确保完全停止
         
         Returns:
             bool: 停止是否成功
         """
         try:
-            if not self.is_running or not self.core_process:
+            # 检查是否有正在运行的核心进程
+            if not self.is_running and not self.core_process:
                 logger.warning("没有正在运行的核心进程")
                 return False
             
-            self.core_process.terminate()
-            self.core_process.wait(timeout=5)
+            # 如果状态不同步，但进程存在，强制更新状态
+            if not self.is_running and self.core_process:
+                logger.warning("检测到状态不同步，强制更新状态")
+                self.is_running = True
+            
+            # 尝试优雅终止
+            if self.core_process:
+                try:
+                    self.core_process.terminate()
+                    # 等待进程终止，最多等待10秒
+                    for _ in range(10):
+                        if self.core_process.poll() is not None:
+                            break
+                        time.sleep(1)
+                    else:
+                        # 如果进程仍未终止，强制终止
+                        logger.warning("进程未正常终止，尝试强制终止")
+                        self.core_process.kill()
+                        self.core_process.wait(timeout=5)
+                except Exception as e:
+                    logger.error(f"终止进程失败: {str(e)}")
+                    # 尝试强制终止
+                    try:
+                        self.core_process.kill()
+                    except:
+                        pass
+            
+            # 清理状态
             self.is_running = False
             self.core_process = None
+            
+            # 清除所有日志回调
+            self.clear_log_callbacks()
             
             logger.info("核心已停止")
             return True
             
         except Exception as e:
             logger.error(f"停止核心失败: {str(e)}")
+            # 无论如何都清理状态
+            self.is_running = False
+            self.core_process = None
             return False
     
     def _read_output(self):
@@ -452,6 +498,161 @@ class CoreManager:
         
         return clean_text.strip()
     
+    def _is_core_process_running(self, core_filename: str) -> bool:
+        """
+        检查是否已经有同名核心进程在运行
+        
+        Args:
+            core_filename: 核心文件名
+            
+        Returns:
+            bool: 是否有同名进程在运行
+        """
+        try:
+            import psutil
+            
+            # 获取进程名（不带扩展名）
+            process_name = Path(core_filename).stem
+            
+            # 查找所有同名进程
+            running_processes = []
+            for proc in psutil.process_iter(['pid', 'name', 'exe']):
+                try:
+                    # 检查进程名或可执行文件路径是否匹配
+                    if (proc.info['name'] and process_name.lower() in proc.info['name'].lower()) or \
+                       (proc.info['exe'] and core_filename.lower() in proc.info['exe'].lower()):
+                        running_processes.append(proc)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            
+            # 如果有同名进程在运行，返回True
+            return len(running_processes) > 0
+            
+        except ImportError:
+            # 如果psutil不可用，使用备用方法
+            logger.warning("psutil模块不可用，使用备用进程检查方法")
+            return self._is_core_process_running_fallback(core_filename)
+        except Exception as e:
+            logger.error(f"检查进程状态失败: {str(e)}")
+            return False
+    
+    def _is_core_process_running_fallback(self, core_filename: str) -> bool:
+        """
+        备用方法：检查是否已经有同名核心进程在运行
+        
+        Args:
+            core_filename: 核心文件名
+            
+        Returns:
+            bool: 是否有同名进程在运行
+        """
+        try:
+            import subprocess
+            import platform
+            
+            system = platform.system()
+            
+            if system == "Windows":
+                # Windows系统使用tasklist命令
+                result = subprocess.run(['tasklist', '/FI', f'IMAGENAME eq {core_filename}'], 
+                                     capture_output=True, text=True, timeout=10)
+                # 如果找到进程，tasklist会显示进程信息
+                return core_filename in result.stdout
+            elif system in ["Linux", "Darwin"]:  # Linux或macOS
+                # 使用ps命令
+                result = subprocess.run(['ps', 'aux'], capture_output=True, text=True, timeout=10)
+                # 检查输出中是否包含核心文件名
+                return core_filename in result.stdout
+            else:
+                logger.warning(f"不支持的平台: {system}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"备用进程检查方法失败: {str(e)}")
+            return False
+    
+    def force_kill_all_core_processes(self, core_filename: str) -> bool:
+        """
+        强制终止所有同名核心进程（安全措施）
+        
+        Args:
+            core_filename: 核心文件名
+            
+        Returns:
+            bool: 是否成功终止所有进程
+        """
+        try:
+            import psutil
+            
+            # 获取进程名（不带扩展名）
+            process_name = Path(core_filename).stem
+            killed_count = 0
+            
+            # 查找所有同名进程
+            for proc in psutil.process_iter(['pid', 'name', 'exe']):
+                try:
+                    # 检查进程名或可执行文件路径是否匹配
+                    if (proc.info['name'] and process_name.lower() in proc.info['name'].lower()) or \
+                       (proc.info['exe'] and core_filename.lower() in proc.info['exe'].lower()):
+                        # 终止进程
+                        proc.terminate()
+                        killed_count += 1
+                        logger.info(f"已终止进程: PID {proc.info['pid']}")
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            
+            if killed_count > 0:
+                logger.success(f"成功终止 {killed_count} 个核心进程")
+                return True
+            else:
+                logger.info("未找到需要终止的核心进程")
+                return True
+                
+        except ImportError:
+            # 如果psutil不可用，使用备用方法
+            logger.warning("psutil模块不可用，使用备用进程终止方法")
+            return self._force_kill_all_core_processes_fallback(core_filename)
+        except Exception as e:
+            logger.error(f"强制终止进程失败: {str(e)}")
+            return False
+    
+    def _force_kill_all_core_processes_fallback(self, core_filename: str) -> bool:
+        """
+        备用方法：强制终止所有同名核心进程
+        
+        Args:
+            core_filename: 核心文件名
+            
+        Returns:
+            bool: 是否成功终止所有进程
+        """
+        try:
+            import subprocess
+            import platform
+            
+            system = platform.system()
+            
+            if system == "Windows":
+                # Windows系统使用taskkill命令
+                result = subprocess.run(['taskkill', '/F', '/IM', core_filename], 
+                                      capture_output=True, text=True, timeout=10)
+                # taskkill成功会返回0
+                return result.returncode == 0
+            elif system in ["Linux", "Darwin"]:  # Linux或macOS
+                # 使用pkill命令
+                process_name = Path(core_filename).stem
+                result = subprocess.run(['pkill', '-f', process_name], 
+                                      capture_output=True, text=True, timeout=10)
+                # pkill成功会返回0
+                return result.returncode == 0
+            else:
+                logger.warning(f"不支持的平台: {system}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"备用进程终止方法失败: {str(e)}")
+            return False
+
     def _get_log_level(self, text: str) -> str:
         """
         识别日志等级
@@ -519,15 +720,38 @@ class CoreManager:
     
     def get_core_status(self) -> dict:
         """
-        获取核心状态信息
+        获取核心状态信息，包括详细的进程检查
         
         Returns:
             dict: 核心状态信息
         """
+        # 检查进程状态
+        process_status = "unknown"
+        if self.core_process:
+            try:
+                return_code = self.core_process.poll()
+                if return_code is None:
+                    process_status = "running"
+                else:
+                    process_status = f"exited_with_code_{return_code}"
+            except:
+                process_status = "error_checking"
+        
+        # 检查是否有同名进程在运行
+        core_filename = self.get_core_filename()
+        other_processes_running = False
+        try:
+            other_processes_running = self._is_core_process_running(core_filename)
+        except:
+            pass
+        
         return {
             'is_running': self.is_running,
             'process_exists': self.core_process is not None,
-            'log_callbacks_count': len(self.log_callbacks)
+            'process_status': process_status,
+            'other_processes_running': other_processes_running,
+            'log_callbacks_count': len(self.log_callbacks),
+            'core_filename': core_filename
         }
 
 # 创建全局核心管理器实例
